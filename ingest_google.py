@@ -20,7 +20,7 @@ PLACE_TYPES = [
     "supermarket", "clothing_store", "pharmacy"
 ]
 
-def get_places(lat, lon, radius=3000, place_type=None, pagetoken=None):
+def get_places(lat, lon, radius=10000, place_type=None, pagetoken=None):
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {"key": GOOGLE_KEY, "location": f"{lat},{lon}", "radius": radius}
     if place_type:
@@ -145,11 +145,11 @@ def main():
     seen = set()
 
     for place_type in PLACE_TYPES:
-        if total_inserted >= 200:
+        if total_inserted >= 500:
             break
 
         print(f"Fetching category: {place_type}")
-        res = get_places(CENTER_LAT, CENTER_LON, radius=4000, place_type=place_type)
+        res = get_places(CENTER_LAT, CENTER_LON, radius=10000, place_type=place_type)
         next_page = None
 
         while True:
@@ -185,11 +185,11 @@ def main():
                 insert_deal(conn, business_id, biz["category"])
 
                 total_inserted += 1
-                if total_inserted >= 200:
+                if total_inserted >= 500:
                     break
                 time.sleep(0.3)
 
-            if total_inserted >= 200:
+            if total_inserted >= 500:
                 break
             next_page = res.get("next_page_token")
             if not next_page:

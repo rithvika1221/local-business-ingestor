@@ -146,7 +146,7 @@ def main():
     seen = set()
 
     for place_type in PLACE_TYPES:
-        if total_inserted >= 500:
+        if total_inserted >= 10:
             break
 
         print(f"Fetching category: {place_type}")
@@ -187,11 +187,11 @@ def main():
                 insert_deal(conn, business_id, biz["category"])
 
                 total_inserted += 1
-                if total_inserted >= 500:
+                if total_inserted >= 10:
                     break
                 time.sleep(0.3)
 
-            if total_inserted >= 500:
+            if total_inserted >= 10:
                 break
             next_page = res.get("next_page_token")
             if not next_page:

@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import psycopg2
+import json
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -166,19 +167,20 @@ def main():
 
                 photo_path = download_photo(photo_ref, pid)
                 biz = {
-                    "name": details.get("name"),
-                    "address": details.get("formatted_address"),
-                    "lat": details.get("geometry", {}).get("location", {}).get("lat"),
-                    "lon": details.get("geometry", {}).get("location", {}).get("lng"),
-                    "phone": details.get("formatted_phone_number"),
-                    "website": details.get("website"),
-                    "place_id": pid,
-                    "category": (details.get("types") or [None])[0],
-                    "rating": details.get("rating"),
-                    "rating_count": details.get("user_ratings_total"),
-                    "opening_hours": details.get("opening_hours"),
-                    "photo_path": photo_path
-                }
+    "name": details.get("name"),
+    "address": details.get("formatted_address"),
+    "lat": details.get("geometry", {}).get("location", {}).get("lat"),
+    "lon": details.get("geometry", {}).get("location", {}).get("lng"),
+    "phone": details.get("formatted_phone_number"),
+    "website": details.get("website"),
+    "place_id": pid,
+    "category": (details.get("types") or [None])[0],
+    "rating": details.get("rating"),
+    "rating_count": details.get("user_ratings_total"),
+    "opening_hours": json.dumps(details.get("opening_hours")) if details.get("opening_hours") else None,
+    "photo_path": photo_path
+}
+
 
                 business_id = upsert_business(conn, biz)
                 insert_reviews(conn, business_id, details.get("reviews"))

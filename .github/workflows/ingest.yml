@@ -35,6 +35,13 @@ jobs:
           echo "Starting ingestion..."
           python ingest_google.py
           echo "✅ Ingestion complete."
+      
+      - name: Debug check for images
+        run: |
+          echo "Checking image directory..."
+          ls -R public || echo "❌ No public folder found"
+          ls -R public/images || echo "❌ No images folder found"
+
 
       # Step 5: Commit and push any new or updated images
       - name: Commit and push downloaded images

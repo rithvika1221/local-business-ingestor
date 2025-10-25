@@ -5,6 +5,8 @@ import psycopg2
 import json
 from datetime import date, timedelta
 from pathlib import Path
+import os
+import requests
 
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 DB_URL = os.getenv("DATABASE_URL")
@@ -50,19 +52,26 @@ def download_photo(photo_ref, place_id):
     """Download photo once and return local path."""
     if not photo_ref:
         return None
-    file_path = f"images/{place_id}.jpg"
+
+    # ✅ Ensure folder is public/images
+    Path("public/images").mkdir(parents=True, exist_ok=True)
+    file_path = f"public/images/{place_id}.jpg"
+
     if os.path.exists(file_path):
         return file_path
 
     url = "https://maps.googleapis.com/maps/api/place/photo"
-    params = {"maxwidth": 800, "photo_reference": photo_ref, "key": GOOGLE_KEY}
+    params = {"maxwidth": 800, "photo_reference": photo_ref, "key": os.getenv("GOOGLE_API_KEY")}
     resp = requests.get(url, params=params, stream=True)
     if resp.status_code == 200:
         with open(file_path, "wb") as f:
             for chunk in resp.iter_content(1024):
                 f.write(chunk)
+        print(f"✅ Saved image {file_path}")
         return file_path
-    return None
+    else:
+        print(f"⚠️ Failed to download photo for {place_id}: {resp.status_code}")
+        return None
 
 def upsert_business(conn, data):
     """Insert or update a business and return its ID."""

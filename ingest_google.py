@@ -7,15 +7,13 @@ from datetime import date, timedelta
 from pathlib import Path
 from bs4 import BeautifulSoup
 
-
-# ----------------------------
-# Scraping helper
-# ----------------------------
+# ==============================
+# SCRAPING HELPER
+# ==============================
 def scrape_website(website_url):
     """Scrape a website for meta description and potential menu links."""
     if not website_url:
         return None
-
     try:
         resp = requests.get(website_url, timeout=6)
         if resp.status_code != 200:
@@ -37,15 +35,14 @@ def scrape_website(website_url):
         ][:3]
 
         return {"meta_description": meta_desc, "menu_links": menu_links}
-
     except Exception as e:
         print(f"⚠️ Failed to scrape {website_url}: {e}")
         return None
 
 
-# ----------------------------
-# DB insert for extras
-# ----------------------------
+# ==============================
+# DB HELPER FOR WEBSITE EXTRAS
+# ==============================
 def insert_extras(conn, business_id, extras):
     """Insert scraped meta description and menu links."""
     if not extras:
@@ -67,40 +64,25 @@ def insert_extras(conn, business_id, extras):
         )
 
 
-# ----------------------------
-# Config and constants
-# ----------------------------
+# ==============================
+# CONFIG
+# ==============================
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 DB_URL = os.getenv("DATABASE_URL")
-
 CENTER_LAT, CENTER_LON = 47.7599, -122.2050  # Bothell, WA
 
 PLACE_TYPES = [
-    "restaurant",
-    "cafe",
-    "store",
-    "gym",
-    "hospital",
-    "school",
-    "bank",
-    "beauty_salon",
-    "book_store",
-    "real_estate_agency",
-    "lawyer",
-    "electronics_store",
-    "travel_agency",
-    "pet_store",
-    "supermarket",
-    "clothing_store",
-    "pharmacy",
+    "restaurant", "cafe", "store", "gym", "hospital", "school",
+    "bank", "beauty_salon", "book_store", "real_estate_agency",
+    "lawyer", "electronics_store", "travel_agency", "pet_store",
+    "supermarket", "clothing_store", "pharmacy"
 ]
 
 
-# ----------------------------
-# Google Places helpers
-# ----------------------------
+# ==============================
+# GOOGLE API CALLS
+# ==============================
 def get_places(lat, lon, radius=10000, place_type=None, pagetoken=None):
-    """Fetch nearby places."""
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {"key": GOOGLE_KEY, "location": f"{lat},{lon}", "radius": radius}
     if place_type:
@@ -112,8 +94,8 @@ def get_places(lat, lon, radius=10000, place_type=None, pagetoken=None):
     return r.json()
 
 
-def place_details(place_id):
-    """Fetch detailed info for one place."""
+def place_details(place_id, retries=3):
+    """Get detailed info for one place (retry up to 3 times if incomplete)."""
     url = "https://maps.googleapis.com/maps/api/place/details/json"
     params = {
         "key": GOOGLE_KEY,
@@ -126,29 +108,44 @@ def place_details(place_id):
             "serves_breakfast,serves_lunch,serves_dinner,serves_beer,serves_wine,takeout"
         ),
     }
-    r = requests.get(url, params=params)
-    r.raise_for_status()
-    return r.json().get("result", {})
+
+    for i in range(retries):
+        try:
+            r = requests.get(url, params=params)
+            r.raise_for_status()
+            result = r.json().get("result", {})
+            if "formatted_address" in result or "website" in result:
+                return result
+            time.sleep(1.5)
+        except Exception as e:
+            print(f"⚠️ Place details retry {i+1} failed for {place_id}: {e}")
+            time.sleep(2)
+    return {}
 
 
-# ----------------------------
-# Photo downloader
-# ----------------------------
+# ==============================
+# PHOTO DOWNLOADER
+# ==============================
 def download_photo(photo_ref, place_id):
-    """Download photo once and return local path."""
-    if not photo_ref:
-        return None
-
+    """Download photo once and return local path or placeholder."""
     Path("public/images").mkdir(parents=True, exist_ok=True)
     file_path = f"public/images/{place_id}.jpg"
 
     if os.path.exists(file_path):
         return file_path
 
+    if not photo_ref:
+        # use a placeholder image
+        placeholder = "public/images/placeholder.jpg"
+        if not os.path.exists(placeholder):
+            # create small blank file to avoid 404 in frontend
+            with open(placeholder, "wb") as f:
+                f.write(b"")
+        return placeholder
+
     url = "https://maps.googleapis.com/maps/api/place/photo"
     params = {"maxwidth": 800, "photo_reference": photo_ref, "key": GOOGLE_KEY}
     resp = requests.get(url, params=params, stream=True)
-
     if resp.status_code == 200:
         with open(file_path, "wb") as f:
             for chunk in resp.iter_content(1024):
@@ -157,14 +154,13 @@ def download_photo(photo_ref, place_id):
         return file_path
     else:
         print(f"⚠️ Failed to download photo for {place_id}: {resp.status_code}")
-        return None
+        return "public/images/placeholder.jpg"
 
 
-# ----------------------------
-# Business insertion
-# ----------------------------
+# ==============================
+# UPSERT BUSINESS
+# ==============================
 def upsert_business(conn, data):
-    """Insert or update a business and return its ID."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -211,11 +207,10 @@ def upsert_business(conn, data):
         return cur.fetchone()[0]
 
 
-# ----------------------------
-# Reviews and Deals
-# ----------------------------
+# ==============================
+# REVIEWS & DEALS
+# ==============================
 def insert_reviews(conn, business_id, reviews):
-    """Insert up to 5 reviews for each business."""
     if not reviews:
         return
     with conn.cursor() as cur:
@@ -236,7 +231,6 @@ def insert_reviews(conn, business_id, reviews):
 
 
 def insert_deal(conn, business_id, category):
-    """Insert a fake or example deal to demonstrate functionality."""
     sample_deals = {
         "restaurant": "10% off your first order!",
         "cafe": "Buy 1 Get 1 Free Latte",
@@ -245,7 +239,6 @@ def insert_deal(conn, business_id, category):
     }
     title = "Special Offer"
     description = sample_deals.get(category, "Exclusive Local Deal")
-
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -262,9 +255,9 @@ def insert_deal(conn, business_id, category):
         )
 
 
-# ----------------------------
-# Main ingestion logic
-# ----------------------------
+# ==============================
+# MAIN
+# ==============================
 def main():
     conn = psycopg2.connect(DB_URL)
     total_inserted = 0
@@ -288,27 +281,23 @@ def main():
                 seen.add(pid)
 
                 details = place_details(pid)
-
-                # merge Nearby Search and Details data
+                # merge Nearby and Details info
                 photo_ref = (
-                    details["photos"][0].get("photo_reference")
+                    details.get("photos", [{}])[0].get("photo_reference")
                     if details.get("photos")
+                    else item.get("photos", [{}])[0].get("photo_reference")
+                    if item.get("photos")
                     else None
                 )
                 photo_path = download_photo(photo_ref, pid)
 
                 biz = {
                     "name": name,
-                    "address": details.get("formatted_address")
-                    or item.get("vicinity"),
-                    "lat": item.get("geometry", {})
-                    .get("location", {})
-                    .get("lat"),
-                    "lon": item.get("geometry", {})
-                    .get("location", {})
-                    .get("lng"),
-                    "phone": details.get("formatted_phone_number"),
-                    "website": details.get("website"),
+                    "address": details.get("formatted_address") or item.get("vicinity"),
+                    "lat": item.get("geometry", {}).get("location", {}).get("lat"),
+                    "lon": item.get("geometry", {}).get("location", {}).get("lng"),
+                    "phone": details.get("formatted_phone_number", "N/A"),
+                    "website": details.get("website", "N/A"),
                     "place_id": pid,
                     "category": (details.get("types") or item.get("types") or [None])[0],
                     "rating": details.get("rating") or item.get("rating"),
@@ -357,9 +346,7 @@ def main():
 
     conn.commit()
     conn.close()
-    print(
-        f"✅ Inserted {total_inserted} businesses with reviews, deals, and local photos."
-    )
+    print(f"✅ Inserted {total_inserted} businesses with reviews, deals, and local photos.")
 
 
 if __name__ == "__main__":

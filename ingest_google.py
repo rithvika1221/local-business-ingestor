@@ -31,7 +31,9 @@ def scrape_website(website_url):
 
         # Extract menu URLs (look for 'menu' in href)
         menu_links = [
-            a["href"] for a in soup.find_all("a", href=True) if "menu" in a["href"].lower()
+            a["href"]
+            for a in soup.find_all("a", href=True)
+            if "menu" in a["href"].lower()
         ][:3]
 
         return {"meta_description": meta_desc, "menu_links": menu_links}
@@ -98,6 +100,7 @@ PLACE_TYPES = [
 # Google Places helpers
 # ----------------------------
 def get_places(lat, lon, radius=10000, place_type=None, pagetoken=None):
+    """Fetch nearby places."""
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {"key": GOOGLE_KEY, "location": f"{lat},{lon}", "radius": radius}
     if place_type:
@@ -110,12 +113,13 @@ def get_places(lat, lon, radius=10000, place_type=None, pagetoken=None):
 
 
 def place_details(place_id):
+    """Fetch detailed info for one place."""
     url = "https://maps.googleapis.com/maps/api/place/details/json"
     params = {
         "key": GOOGLE_KEY,
         "place_id": place_id,
         "fields": (
-            "name,formatted_address,geometry,formatted_phone_number,website,"
+            "formatted_address,formatted_phone_number,website,"
             "types,rating,user_ratings_total,reviews,opening_hours,photos,"
             "price_level,editorial_summary,google_maps_uri,"
             "curbside_pickup,delivery,dine_in,reservable,"
@@ -277,15 +281,15 @@ def main():
         while True:
             for item in res.get("results", []):
                 pid = item.get("place_id")
-                if not pid or pid in seen:
+                name = item.get("name")
+
+                if not pid or not name or pid in seen:
                     continue
                 seen.add(pid)
 
                 details = place_details(pid)
-                if not details.get("name"):
-                    print(f"⚠️ Skipping place_id {pid} due to missing name")
-                    continue  # 🔹 Skip invalid record
 
+                # merge Nearby Search and Details data
                 photo_ref = (
                     details["photos"][0].get("photo_reference")
                     if details.get("photos")
@@ -294,26 +298,28 @@ def main():
                 photo_path = download_photo(photo_ref, pid)
 
                 biz = {
-                    "name": details.get("name"),
-                    "address": details.get("formatted_address"),
-                    "lat": details.get("geometry", {})
+                    "name": name,
+                    "address": details.get("formatted_address")
+                    or item.get("vicinity"),
+                    "lat": item.get("geometry", {})
                     .get("location", {})
                     .get("lat"),
-                    "lon": details.get("geometry", {})
+                    "lon": item.get("geometry", {})
                     .get("location", {})
                     .get("lng"),
                     "phone": details.get("formatted_phone_number"),
                     "website": details.get("website"),
                     "place_id": pid,
-                    "category": (details.get("types") or [None])[0],
-                    "rating": details.get("rating"),
-                    "rating_count": details.get("user_ratings_total"),
+                    "category": (details.get("types") or item.get("types") or [None])[0],
+                    "rating": details.get("rating") or item.get("rating"),
+                    "rating_count": details.get("user_ratings_total")
+                    or item.get("user_ratings_total"),
                     "opening_hours": json.dumps(details.get("opening_hours"))
                     if details.get("opening_hours")
                     else None,
                     "photo_path": photo_path,
                     "description": details.get("editorial_summary", {}).get("overview"),
-                    "price_level": details.get("price_level"),
+                    "price_level": details.get("price_level") or item.get("price_level"),
                     "maps_url": details.get("google_maps_uri"),
                 }
 
@@ -329,7 +335,7 @@ def main():
                 total_inserted += 1
                 if total_inserted >= 10:
                     break
-                time.sleep(0.3)
+                time.sleep(0.5)
 
             if total_inserted >= 10:
                 break
@@ -351,7 +357,9 @@ def main():
 
     conn.commit()
     conn.close()
-    print(f"✅ Inserted {total_inserted} businesses with reviews, deals, and local photos.")
+    print(
+        f"✅ Inserted {total_inserted} businesses with reviews, deals, and local photos."
+    )
 
 
 if __name__ == "__main__":

@@ -282,6 +282,10 @@ def main():
                 seen.add(pid)
 
                 details = place_details(pid)
+                if not details.get("name"):
+                    print(f"⚠️ Skipping place_id {pid} due to missing name")
+                    continue  # 🔹 Skip invalid record
+
                 photo_ref = (
                     details["photos"][0].get("photo_reference")
                     if details.get("photos")

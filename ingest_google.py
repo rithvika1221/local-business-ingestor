@@ -125,17 +125,43 @@ def place_details(place_id, retries=3):
 # YELP API CALLS
 # ==============================
 def get_yelp_business(name, lat, lon):
-    """Find Yelp business near coordinates."""
+    """Find Yelp business near coordinates and fetch full details."""
     if not YELP_KEY:
         return None
-    url = "https://api.yelp.com/v3/businesses/search"
+
     headers = {"Authorization": f"Bearer {YELP_KEY}"}
+
+    # Step 1: Search for the business near the given location
+    search_url = "https://api.yelp.com/v3/businesses/search"
     params = {"term": name, "latitude": lat, "longitude": lon, "limit": 1}
     try:
-        r = requests.get(url, headers=headers, params=params, timeout=6)
+        r = requests.get(search_url, headers=headers, params=params, timeout=6)
         r.raise_for_status()
         data = r.json().get("businesses", [])
-        return data[0] if data else None
+        if not data:
+            return None
+        biz = data[0]
+        yelp_id = biz["id"]
+
+        # Step 2: Get full business details
+        details_url = f"https://api.yelp.com/v3/businesses/{yelp_id}"
+        dr = requests.get(details_url, headers=headers, timeout=6)
+        dr.raise_for_status()
+        details = dr.json()
+
+        # Combine data from both responses
+        return {
+            "id": yelp_id,
+            "name": biz.get("name"),
+            "url": details.get("url"),
+            "display_phone": details.get("display_phone") or biz.get("display_phone"),
+            "price": details.get("price"),
+            "location": details.get("location", {}),
+            "external_website": (
+                details.get("attributes", {}).get("business_website")
+                or details.get("website")
+            ),
+        }
     except Exception as e:
         print(f"⚠️ Yelp lookup failed for {name}: {e}")
         return None
@@ -310,7 +336,10 @@ def main():
                 if not phone or phone == "N/A":
                     phone = yelp_data.get("display_phone")
                 if not website or website == "N/A":
-                    website = yelp_data.get("url")
+    website = (
+        yelp_data.get("external_website")
+        or yelp_data.get("url")  # fallback if no website available
+    )
                 if not address:
                     address = yelp_data.get("location", {}).get("address1")
 

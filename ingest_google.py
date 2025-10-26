@@ -336,10 +336,10 @@ def main():
                 if not phone or phone == "N/A":
                     phone = yelp_data.get("display_phone")
                 if not website or website == "N/A":
-    website = (
-        yelp_data.get("external_website")
-        or yelp_data.get("url")  # fallback if no website available
-    )
+                    website = (
+                        yelp_data.get("external_website")
+                        or yelp_data.get("url")  # fallback if no website available
+                    )
                 if not address:
                     address = yelp_data.get("location", {}).get("address1")
 

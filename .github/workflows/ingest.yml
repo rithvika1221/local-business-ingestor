@@ -1,4 +1,4 @@
-name: Ingest Google Places Data and Save Images
+name: Ingest Local Businesses (Google + Yelp)
 
 on:
   workflow_dispatch:        # allows manual trigger
@@ -24,26 +24,27 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests psycopg2-binary beautifulsoup4
+          pip install requests psycopg2-binary beautifulsoup4 yelpapi
 
-      # Step 4: Run ingestion script
+      # Step 4: Run ingestion script (Google + Yelp)
       - name: Run ingestion script
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          YELP_API_KEY: ${{ secrets.YELP_API_KEY }}     # ✅ Added Yelp key
         run: |
           echo "Starting ingestion..."
           python ingest_google.py
           echo "✅ Ingestion complete."
       
+      # Step 5: Debug check for images
       - name: Debug check for images
         run: |
           echo "Checking image directory..."
           ls -R public || echo "❌ No public folder found"
           ls -R public/images || echo "❌ No images folder found"
 
-
-      # Step 5: Commit and push any new or updated images
+      # Step 6: Commit and push any new or updated images
       - name: Commit and push downloaded images
         run: |
           echo "Committing new images..."
@@ -51,5 +52,5 @@ jobs:
           git config --global user.name "GitHub Actions"
           git pull --rebase
           git add public/images || true
-          git diff --cached --quiet || git commit -m "Add/Update Google Places images from ingestion"
+          git diff --cached --quiet || git commit -m "Add/Update Google + Yelp business images"
           git push origin main || echo "No new images to push."

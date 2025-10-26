@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 # ==============================
 def scrape_website(website_url):
     """Scrape a website for meta description and potential menu links."""
-    if not website_url:
+    if not website_url or website_url == "N/A":
         return None
     try:
         resp = requests.get(website_url, timeout=6)
@@ -21,13 +21,11 @@ def scrape_website(website_url):
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Extract meta description
         meta_desc = None
         meta_tag = soup.find("meta", attrs={"name": "description"})
         if meta_tag and meta_tag.get("content"):
             meta_desc = meta_tag["content"]
 
-        # Extract menu URLs (look for 'menu' in href)
         menu_links = [
             a["href"]
             for a in soup.find_all("a", href=True)
@@ -68,7 +66,9 @@ def insert_extras(conn, business_id, extras):
 # CONFIG
 # ==============================
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
+YELP_KEY = os.getenv("YELP_API_KEY")
 DB_URL = os.getenv("DATABASE_URL")
+
 CENTER_LAT, CENTER_LON = 47.7599, -122.2050  # Bothell, WA
 
 PLACE_TYPES = [
@@ -103,9 +103,7 @@ def place_details(place_id, retries=3):
         "fields": (
             "formatted_address,formatted_phone_number,website,"
             "types,rating,user_ratings_total,reviews,opening_hours,photos,"
-            "price_level,editorial_summary,google_maps_uri,"
-            "curbside_pickup,delivery,dine_in,reservable,"
-            "serves_breakfast,serves_lunch,serves_dinner,serves_beer,serves_wine,takeout"
+            "price_level,editorial_summary,google_maps_uri"
         ),
     }
 
@@ -114,13 +112,33 @@ def place_details(place_id, retries=3):
             r = requests.get(url, params=params)
             r.raise_for_status()
             result = r.json().get("result", {})
-            if "formatted_address" in result or "website" in result:
+            if result:
                 return result
             time.sleep(1.5)
         except Exception as e:
             print(f"⚠️ Place details retry {i+1} failed for {place_id}: {e}")
             time.sleep(2)
     return {}
+
+
+# ==============================
+# YELP API CALLS
+# ==============================
+def get_yelp_business(name, lat, lon):
+    """Find Yelp business near coordinates."""
+    if not YELP_KEY:
+        return None
+    url = "https://api.yelp.com/v3/businesses/search"
+    headers = {"Authorization": f"Bearer {YELP_KEY}"}
+    params = {"term": name, "latitude": lat, "longitude": lon, "limit": 1}
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=6)
+        r.raise_for_status()
+        data = r.json().get("businesses", [])
+        return data[0] if data else None
+    except Exception as e:
+        print(f"⚠️ Yelp lookup failed for {name}: {e}")
+        return None
 
 
 # ==============================
@@ -135,10 +153,8 @@ def download_photo(photo_ref, place_id):
         return file_path
 
     if not photo_ref:
-        # use a placeholder image
         placeholder = "public/images/placeholder.jpg"
         if not os.path.exists(placeholder):
-            # create small blank file to avoid 404 in frontend
             with open(placeholder, "wb") as f:
                 f.write(b"")
         return placeholder
@@ -166,8 +182,9 @@ def upsert_business(conn, data):
             """
         INSERT INTO businesses (name, category, address, lat, lon, phone, website,
                                 google_place_id, rating, rating_count, opening_hours,
-                                photo_path, description, price_level, maps_url)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                photo_path, description, price_level, maps_url,
+                                yelp_id, yelp_url, price)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (google_place_id) DO UPDATE SET
           name=EXCLUDED.name,
           category=EXCLUDED.category,
@@ -183,25 +200,19 @@ def upsert_business(conn, data):
           description=EXCLUDED.description,
           price_level=EXCLUDED.price_level,
           maps_url=EXCLUDED.maps_url,
+          yelp_id=EXCLUDED.yelp_id,
+          yelp_url=EXCLUDED.yelp_url,
+          price=EXCLUDED.price,
           updated_at=now()
         RETURNING id;
         """,
             (
-                data.get("name"),
-                data.get("category"),
-                data.get("address"),
-                data.get("lat"),
-                data.get("lon"),
-                data.get("phone"),
-                data.get("website"),
-                data.get("place_id"),
-                data.get("rating"),
-                data.get("rating_count"),
-                data.get("opening_hours"),
-                data.get("photo_path"),
-                data.get("description"),
-                data.get("price_level"),
-                data.get("maps_url"),
+                data.get("name"), data.get("category"), data.get("address"),
+                data.get("lat"), data.get("lon"), data.get("phone"), data.get("website"),
+                data.get("place_id"), data.get("rating"), data.get("rating_count"),
+                data.get("opening_hours"), data.get("photo_path"),
+                data.get("description"), data.get("price_level"), data.get("maps_url"),
+                data.get("yelp_id"), data.get("yelp_url"), data.get("price"),
             ),
         )
         return cur.fetchone()[0]
@@ -269,84 +280,81 @@ def main():
 
         print(f"Fetching category: {place_type}")
         res = get_places(CENTER_LAT, CENTER_LON, radius=10000, place_type=place_type)
-        next_page = None
 
-        while True:
-            for item in res.get("results", []):
-                pid = item.get("place_id")
-                name = item.get("name")
+        for item in res.get("results", []):
+            pid = item.get("place_id")
+            name = item.get("name")
+            if not pid or not name or pid in seen:
+                continue
+            seen.add(pid)
 
-                if not pid or not name or pid in seen:
-                    continue
-                seen.add(pid)
+            details = place_details(pid)
+            photo_ref = (
+                details.get("photos", [{}])[0].get("photo_reference")
+                if details.get("photos")
+                else item.get("photos", [{}])[0].get("photo_reference")
+                if item.get("photos")
+                else None
+            )
+            photo_path = download_photo(photo_ref, pid)
 
-                details = place_details(pid)
-                # merge Nearby and Details info
-                photo_ref = (
-                    details.get("photos", [{}])[0].get("photo_reference")
-                    if details.get("photos")
-                    else item.get("photos", [{}])[0].get("photo_reference")
-                    if item.get("photos")
-                    else None
-                )
-                photo_path = download_photo(photo_ref, pid)
+            # Yelp enrichment
+            lat = item.get("geometry", {}).get("location", {}).get("lat")
+            lon = item.get("geometry", {}).get("location", {}).get("lng")
+            yelp_data = get_yelp_business(name, lat, lon)
+            phone = details.get("formatted_phone_number", None)
+            website = details.get("website", None)
+            address = details.get("formatted_address") or item.get("vicinity")
 
-                biz = {
-                    "name": name,
-                    "address": details.get("formatted_address") or item.get("vicinity"),
-                    "lat": item.get("geometry", {}).get("location", {}).get("lat"),
-                    "lon": item.get("geometry", {}).get("location", {}).get("lng"),
-                    "phone": details.get("formatted_phone_number", "N/A"),
-                    "website": details.get("website", "N/A"),
-                    "place_id": pid,
-                    "category": (details.get("types") or item.get("types") or [None])[0],
-                    "rating": details.get("rating") or item.get("rating"),
-                    "rating_count": details.get("user_ratings_total")
-                    or item.get("user_ratings_total"),
-                    "opening_hours": json.dumps(details.get("opening_hours"))
-                    if details.get("opening_hours")
-                    else None,
-                    "photo_path": photo_path,
-                    "description": details.get("editorial_summary", {}).get("overview"),
-                    "price_level": details.get("price_level") or item.get("price_level"),
-                    "maps_url": details.get("google_maps_uri"),
-                }
+            if yelp_data:
+                if not phone or phone == "N/A":
+                    phone = yelp_data.get("display_phone")
+                if not website or website == "N/A":
+                    website = yelp_data.get("url")
+                if not address:
+                    address = yelp_data.get("location", {}).get("address1")
 
-                business_id = upsert_business(conn, biz)
+            biz = {
+                "name": name,
+                "address": address,
+                "lat": lat,
+                "lon": lon,
+                "phone": phone or "N/A",
+                "website": website or "N/A",
+                "place_id": pid,
+                "category": (details.get("types") or item.get("types") or [None])[0],
+                "rating": details.get("rating") or item.get("rating"),
+                "rating_count": details.get("user_ratings_total") or item.get("user_ratings_total"),
+                "opening_hours": json.dumps(details.get("opening_hours"))
+                    if details.get("opening_hours") else None,
+                "photo_path": photo_path,
+                "description": details.get("editorial_summary", {}).get("overview"),
+                "price_level": details.get("price_level") or item.get("price_level"),
+                "maps_url": details.get("google_maps_uri"),
+                "yelp_id": yelp_data.get("id") if yelp_data else None,
+                "yelp_url": yelp_data.get("url") if yelp_data else None,
+                "price": yelp_data.get("price") if yelp_data else None,
+            }
 
-                extras = scrape_website(details.get("website"))
-                if extras:
-                    insert_extras(conn, business_id, extras)
+            business_id = upsert_business(conn, biz)
+            extras = scrape_website(biz["website"])
+            if extras:
+                insert_extras(conn, business_id, extras)
+            insert_reviews(conn, business_id, details.get("reviews"))
+            insert_deal(conn, business_id, biz["category"])
 
-                insert_reviews(conn, business_id, details.get("reviews"))
-                insert_deal(conn, business_id, biz["category"])
-
-                total_inserted += 1
-                if total_inserted >= 100:
-                    break
-                time.sleep(0.5)
-
+            total_inserted += 1
             if total_inserted >= 100:
                 break
+            time.sleep(0.5)
 
-            next_page = res.get("next_page_token")
-            if not next_page:
-                break
-
-            time.sleep(2)
-            res = get_places(
-                CENTER_LAT,
-                CENTER_LON,
-                radius=10000,
-                place_type=place_type,
-                pagetoken=next_page,
-            )
-
+        if total_inserted >= 100:
+            break
         time.sleep(1)
 
     conn.commit()
     conn.close()
-    print(f"✅ Inserted {total_inserted} businesses with reviews, deals, and local photos.")
+    print(f"✅ Inserted {total_inserted} businesses with Yelp enrichment.")
 
 
 if __name__ == "__main__":

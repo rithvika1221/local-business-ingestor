@@ -8,6 +8,55 @@ from pathlib import Path
 import os
 import requests
 
+from bs4 import BeautifulSoup
+
+def scrape_website(website_url):
+    """Scrapes a website for meta description and potential menu links."""
+    if not website_url:
+        return None
+
+    try:
+        resp = requests.get(website_url, timeout=6)
+        if resp.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Extract meta description
+        meta_desc = None
+        meta_tag = soup.find("meta", attrs={"name": "description"})
+        if meta_tag and meta_tag.get("content"):
+            meta_desc = meta_tag["content"]
+
+        # Extract menu URLs (look for 'menu' in href)
+        menu_links = [a['href'] for a in soup.find_all('a', href=True) if "menu" in a['href'].lower()][:3]
+
+        return {
+            "meta_description": meta_desc,
+            "menu_links": menu_links
+        }
+    except Exception as e:
+        print(f"⚠️ Failed to scrape {website_url}: {e}")
+        return None
+
+def insert_extras(conn, business_id, extras):
+    """Insert scraped meta description and menu links."""
+    if not extras:
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+        INSERT INTO business_extras (business_id, meta_description, menu_links)
+        VALUES (%s,%s,%s)
+        ON CONFLICT (business_id) DO UPDATE SET
+          meta_description=EXCLUDED.meta_description,
+          menu_links=EXCLUDED.menu_links;
+        """, (
+            business_id,
+            extras.get("meta_description"),
+            extras.get("menu_links")
+        ))
+
+
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 DB_URL = os.getenv("DATABASE_URL")
 
@@ -40,9 +89,13 @@ def place_details(place_id):
         "key": GOOGLE_KEY,
         "place_id": place_id,
         "fields": (
-            "name,formatted_address,geometry,formatted_phone_number,website,"
-            "types,rating,user_ratings_total,reviews,opening_hours,photos"
-        )
+    "name,formatted_address,geometry,formatted_phone_number,website,"
+    "types,rating,user_ratings_total,reviews,opening_hours,photos,"
+    "price_level,editorial_summary,google_maps_uri,"
+    "curbside_pickup,delivery,dine_in,reservable,"
+    "serves_breakfast,serves_lunch,serves_dinner,serves_beer,serves_wine,takeout"
+)
+
     }
     r = requests.get(url, params=params)
     r.raise_for_status()
@@ -78,8 +131,9 @@ def upsert_business(conn, data):
     with conn.cursor() as cur:
         cur.execute("""
         INSERT INTO businesses (name, category, address, lat, lon, phone, website,
-                                google_place_id, rating, rating_count, opening_hours, photo_path)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                google_place_id, rating, rating_count, opening_hours,
+                                photo_path, description, price_level, maps_url)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (google_place_id) DO UPDATE SET
           name=EXCLUDED.name,
           category=EXCLUDED.category,
@@ -92,6 +146,9 @@ def upsert_business(conn, data):
           rating_count=EXCLUDED.rating_count,
           opening_hours=EXCLUDED.opening_hours,
           photo_path=EXCLUDED.photo_path,
+          description=EXCLUDED.description,
+          price_level=EXCLUDED.price_level,
+          maps_url=EXCLUDED.maps_url,
           updated_at=now()
         RETURNING id;
         """, (
@@ -107,8 +164,12 @@ def upsert_business(conn, data):
             data.get("rating_count"),
             data.get("opening_hours"),
             data.get("photo_path"),
+            data.get("description"),
+            data.get("price_level"),
+            data.get("maps_url"),
         ))
         return cur.fetchone()[0]
+
 
 def insert_reviews(conn, business_id, reviews):
     """Insert up to 5 reviews for each business."""
@@ -187,11 +248,20 @@ def main():
     "rating": details.get("rating"),
     "rating_count": details.get("user_ratings_total"),
     "opening_hours": json.dumps(details.get("opening_hours")) if details.get("opening_hours") else None,
-    "photo_path": photo_path
+    "photo_path": photo_path,
+    # ✅ NEW FIELDS
+    "description": details.get("editorial_summary", {}).get("overview"),
+    "price_level": details.get("price_level"),
+    "maps_url": details.get("google_maps_uri")
 }
 
 
+
                 business_id = upsert_business(conn, biz)
+                extras = scrape_website(details.get("website"))
+if extras:
+    insert_extras(conn, business_id, extras)
+
                 insert_reviews(conn, business_id, details.get("reviews"))
                 insert_deal(conn, business_id, biz["category"])
 
